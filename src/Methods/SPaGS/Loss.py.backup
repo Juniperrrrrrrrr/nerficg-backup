@@ -1,0 +1,70 @@
+     # -- coding: utf-8 --
+# 文件编码声明，指定使用UTF-8编码，支持中文等特殊字符
+
+"""SPaGS/Loss.py: Loss function."""
+# 模块文档字符串，说明这是SPaGS的Loss函数实现文件
+
+import torch
+import torchmetrics
+# 导入PyTorch及其生态库torchmetrics（用于评估指标）
+
+from Framework import ConfigParameterList
+# 从自定义框架导入配置参数列表类
+from Optim.Losses.Base import BaseLoss
+# 从优化模块导入基础Loss基类
+from Optim.Losses.FusedDSSIM import fused_dssim
+# 导入自定义的融合DSSIM损失函数
+
+class SPaGSLoss(BaseLoss):
+    """SPaGS模型的损失函数类，继承自BaseLoss"""
+    
+    def __init__(self, loss_config: ConfigParameterList) -> None:
+        """
+        初始化SPaGSLoss
+        
+        Args:
+            loss_config: 损失函数配置参数，包含各个loss的权重系数
+        """
+        super().__init__()  # 调用父类BaseLoss的初始化方法
+        
+        # 1. 添加L1颜色损失（像素级绝对误差）
+        # L1损失计算输入和目标之间的平均绝对误差(MAE)
+        # loss_config.LAMBDA_L1 是L1损失的权重系数
+        self.addLossMetric('L1_Color', 
+                          torch.nn.functional.l1_loss,  # PyTorch内置L1损失函数
+                          loss_config.LAMBDA_L1)       # 权重参数
+        
+        # 2. 添加DSSIM颜色损失（结构相似性损失）
+        # DSSIM (Structural Dissimilarity) 衡量图像结构相似性
+        # fused_dssim 可能是自定义的实现，结合了多尺度或特定优化
+        self.addLossMetric('DSSIM_Color', 
+                          fused_dssim,                  # 自定义DSSIM函数
+                          loss_config.LAMBDA_DSSIM)    # 权重参数
+        
+        # 3. 添加PSNR质量指标（仅用于评估，不参与梯度回传）
+        # PSNR (Peak Signal-to-Noise Ratio) 峰值信噪比
+        # 这是一个评估指标，不是损失函数，所以不用于反向传播
+        self.addQualityMetric('PSNR', 
+                             torchmetrics.functional.image.peak_signal_noise_ratio)
+
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        前向传播计算总损失
+        
+        Args:
+            input: 模型预测的输出图像，形状通常为 [B, C, H, W]
+            target: 真实目标图像，形状与input相同
+            
+        Returns:
+            torch.Tensor: 加权后的总损失值
+        """
+        # 调用父类的forward方法，传入各损失/指标的计算参数
+        return super().forward({
+            'L1_Color': {'input': input, 'target': target},        # L1损失参数
+            'DSSIM_Color': {'input': input, 'target': target},     # DSSIM损失参数
+            'PSNR': {  # PSNR指标参数
+                'preds': input,        # 预测图像
+                'target': target,      # 目标图像
+                'data_range': 1.0      # 数据范围（假设图像值在[0,1]之间）
+            }
+        })

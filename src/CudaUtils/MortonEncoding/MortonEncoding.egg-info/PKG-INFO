@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: MortonEncoding
+Version: 0.0.0
+Summary: CUDA-accelerated morton code computation for 3d points.
+Author: Florian Hahlbohm
+Dynamic: author
+Dynamic: summary

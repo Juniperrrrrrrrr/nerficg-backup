@@ -1,0 +1,9 @@
+dataset/
+output/
+*.log
+__pycache__/
+*.pyc
+*.ckpt
+*.pth
+*.npy
+*.npz
