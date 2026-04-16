@@ -91,11 +91,13 @@ void SPaGS::rasterization::alpha_blend_first_k::backward(
             grad_rotations,
             grad_opacities,
             grad_sh_0,
+            densification_info,
             densification_info_helper,
             width,
             height,
             n_fragments,
-            n_pixels
+            n_pixels,
+            n_primitives
         );
         CHECK_CUDA(config::debug_backward, "blend_backward")
 

@@ -67,11 +67,13 @@ void SPaGS::rasterization::alpha_blend_global_ordering::backward(
         grad_rotations,
         grad_opacities,
         grad_sh_0,
+        densification_info,
         densification_info_helper,
         width,
         height,
         grid.x,
-        near
+        near,
+        n_primitives
     );
     CHECK_CUDA(config::debug_backward, "blend_backward")
 

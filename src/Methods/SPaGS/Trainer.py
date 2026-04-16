@@ -169,6 +169,8 @@ def _export_spags_gaussians_to_point_cloud_ply(gaussians, ply_path, sh_degree: i
     DENSIFY_END_ITERATION=15_000,
     DENSIFICATION_INTERVAL=100,
     DENSIFY_GRAD_THRESHOLD=0.00005,  # 0.0002
+    DENSIFY_GRAD_THRESHOLD_START=0.0001,
+    DENSIFY_GRAD_THRESHOLD_END=0.0004,
     REDUCE_OPACITY_AFTER_DENSIFY=0.001,  # 每次 densify 后对 opacity 的减量；设为 0 可减少被 bake 剪枝的高斯
     BAKE_MIN_OPACITY=0.00392156862,  # bake 时剪枝阈值 1/255；设为 0 不在 bake 时按透明度剪枝，保留更多高斯
     # 是否在初始化高斯时导出一份「训练前初始点云」到 PLY，方便用 Blender/CloudCompare 查看密度分布
@@ -190,6 +192,10 @@ class SPaGSTrainer(GuiTrainer):
         super(SPaGSTrainer, self).__init__(**kwargs)
         self.train_sampler = None
         self.loss = SPaGSLoss(loss_config=self.LOSS)
+        # 4.2 Exponentially Ascending Gradient Threshold
+        dense_iters = max(1, (self.DENSIFY_END_ITERATION - self.DENSIFY_START_ITERATION) // self.DENSIFICATION_INTERVAL)
+        self.dense_factor = pow((self.DENSIFY_GRAD_THRESHOLD_END / self.DENSIFY_GRAD_THRESHOLD_START), 1.0 / dense_iters)
+        self.current_grad_threshold = self.DENSIFY_GRAD_THRESHOLD_START
 
     @preTrainingCallback(priority=50)
     @torch.no_grad()
@@ -203,9 +209,15 @@ class SPaGSTrainer(GuiTrainer):
         """Sets up the model."""
         dataset.train()
         camera_centers = torch.stack([camera_properties.T for camera_properties in dataset])
-        radius = (1.1 * torch.max(torch.linalg.norm(camera_centers - torch.mean(camera_centers, dim=0), dim=1))).item()
-        # radius = torch.linalg.norm(dataset.point_cloud.positions - torch.mean(camera_centers, dim=0), dim=1).mean().item()
-        Logger.logInfo(f'Training cameras extent: {radius:.2f}')
+        # 4.1 Corrected Scene-Extent: use mean distance from SFM points to camera center instead of camera bbox radius
+        old_radius = (1.1 * torch.max(torch.linalg.norm(camera_centers - torch.mean(camera_centers, dim=0), dim=1))).item()
+        if dataset.point_cloud is not None:
+            center = -torch.mean(camera_centers, dim=0)  # match nerfpp norm translate sign convention
+            dist = torch.linalg.norm(dataset.point_cloud.positions.cuda() - center, dim=1)
+            radius = dist.mean().item()
+        else:
+            radius = old_radius
+        Logger.logInfo(f'Training cameras extent (old): {old_radius:.2f} | proposed: {radius:.2f}')
 
         if dataset.point_cloud is not None:
             point_cloud = dataset.point_cloud
@@ -283,10 +295,11 @@ class SPaGSTrainer(GuiTrainer):
         """Apply densification."""
         if iteration == self.DENSIFY_START_ITERATION:
             return
-        # self.model.gaussians.densify_and_prune(self.DENSIFY_GRAD_THRESHOLD, self.OPACITY_THRESHOLD, iteration > self.OPACITY_RESET_INTERVAL)
-        self.model.gaussians.densify_and_prune(self.DENSIFY_GRAD_THRESHOLD, self.OPACITY_THRESHOLD, prune_large_gaussians=False)
+        # 4.2 dynamic threshold
+        self.current_grad_threshold *= self.dense_factor
+        self.model.gaussians.densify_and_prune(self.current_grad_threshold, self.OPACITY_THRESHOLD, prune_large_gaussians=False)
 
-        if self.REDUCE_OPACITY_AFTER_DENSIFY > 0:
+        if float(str(self.REDUCE_OPACITY_AFTER_DENSIFY).rstrip('.')) > 0:
             self.model.gaussians.reduce_opacity(self.REDUCE_OPACITY_AFTER_DENSIFY)
 
         if self.USE_3D_FILTER:

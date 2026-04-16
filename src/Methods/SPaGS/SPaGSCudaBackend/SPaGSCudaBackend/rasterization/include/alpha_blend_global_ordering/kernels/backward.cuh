@@ -53,9 +53,8 @@ namespace SPaGS::rasterization::alpha_blend_global_ordering::kernels::backward {
                     dot(make_float3(M2), position_world) + M2.w,
                     dot(make_float3(M3), position_world) + M3.w
                 );
-                distance_scale = length(position_view) * 0.5f;
+                distance_scale = fminf(1.0f, length(position_view) * 0.5f);
             }
-            densification_info[primitive_idx] += 1.0f;
             densification_info[n_primitives + primitive_idx] += length(dL_dposition * distance_scale);
             if (densification_info_helper != nullptr) densification_info[2 * n_primitives + primitive_idx] += distance_scale * densification_info_helper[primitive_idx];
         }
@@ -81,10 +80,12 @@ namespace SPaGS::rasterization::alpha_blend_global_ordering::kernels::backward {
         float* grad_opacities,
         float3* grad_sh_0, // used to store dL_drgb
         float* densification_info,
+        float* densification_info_helper,
         const uint width,
         const uint height,
         const uint grid_width,
-        const float near)
+        const float near,
+        const uint n_primitives)
     {
         const cooperative_groups::thread_block block = cooperative_groups::this_thread_block();
         const dim3 group_index = block.group_index();
@@ -267,7 +268,11 @@ namespace SPaGS::rasterization::alpha_blend_global_ordering::kernels::backward {
                     atomicAdd(&grad_rotations[primitive_idx].w, dL_drotation.w);
 
                     // densification info
-                    if (densification_info != nullptr) atomicAdd(&densification_info[primitive_idx], fabsf(dL_dposition.x) + fabsf(dL_dposition.y) + fabsf(dL_dposition.z));
+                    if (densification_info != nullptr) {
+                        atomicAdd(&densification_info[primitive_idx], 1.0f);
+                        atomicAdd(&densification_info[n_primitives + primitive_idx], length(dL_dposition));
+                    }
+                    if (densification_info_helper != nullptr) atomicAdd(&densification_info_helper[primitive_idx], fabsf(dL_dposition.x) + fabsf(dL_dposition.y) + fabsf(dL_dposition.z));
 
                 }
 

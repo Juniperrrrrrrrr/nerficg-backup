@@ -93,9 +93,8 @@ namespace SPaGS::rasterization::oit_blend::kernels::backward {
                     dot(make_float3(M2), position_world) + M2.w,
                     dot(make_float3(M3), position_world) + M3.w
                 );
-                distance_scale = length(position_view) * 0.5f;
+                distance_scale = fminf(1.0f, length(position_view) * 0.5f);
             }
-            densification_info[primitive_idx] += 1.0f;
             densification_info[n_primitives + primitive_idx] += length(dL_dposition * distance_scale);
             if (densification_info_helper != nullptr) densification_info[2 * n_primitives + primitive_idx] += distance_scale * densification_info_helper[primitive_idx];
         }
@@ -162,7 +161,7 @@ namespace SPaGS::rasterization::oit_blend::kernels::backward {
 
         // every thread accumulates gradients for one gaussian at a time
         uint current_primitive_idx;
-        float dL_dopacity_accum, densification_info_accum, current_opacity;
+        float dL_dopacity_accum, pixel_count_accum, grad_l2_norm_accum, current_opacity;
         float3 dL_drgb_accum, dL_dposition_accum, dL_dMT1_accum, dL_dMT2_accum, dL_dMT3_accum, current_rgb;
         float4 current_MT1, current_MT2, current_MT3;
 
@@ -186,7 +185,10 @@ namespace SPaGS::rasterization::oit_blend::kernels::backward {
                 dL_dMT1_accum = make_float3(0.0f);
                 dL_dMT2_accum = make_float3(0.0f);
                 dL_dMT3_accum = make_float3(0.0f);
-                if (densification_info != nullptr) densification_info_accum = 0.0f;
+                if (densification_info != nullptr) {
+                    pixel_count_accum = 0.0f;
+                    grad_l2_norm_accum = 0.0f;
+                }
             }
             block.sync();
             // iterate over pixels
@@ -284,7 +286,10 @@ namespace SPaGS::rasterization::oit_blend::kernels::backward {
                         dot(M_c3, dL_dMT_c4)
                     );
                     dL_dposition_accum += dL_dposition;
-                    if (densification_info != nullptr) densification_info_accum += fabsf(dL_dposition.x) + fabsf(dL_dposition.y) + fabsf(dL_dposition.z);
+                    if (densification_info != nullptr) {
+                        pixel_count_accum += 1.0f;
+                        grad_l2_norm_accum += length(dL_dposition);
+                    }
                 }
             }
             block.sync();
@@ -306,7 +311,10 @@ namespace SPaGS::rasterization::oit_blend::kernels::backward {
                 atomicAdd(&grad_MT[6 * n_primitives + current_primitive_idx], dL_dMT3_accum.x);
                 atomicAdd(&grad_MT[7 * n_primitives + current_primitive_idx], dL_dMT3_accum.y);
                 atomicAdd(&grad_MT[8 * n_primitives + current_primitive_idx], dL_dMT3_accum.z);
-                if (densification_info != nullptr) atomicAdd(&densification_info[current_primitive_idx], densification_info_accum);
+                if (densification_info != nullptr) {
+                    atomicAdd(&densification_info[current_primitive_idx], pixel_count_accum);
+                    atomicAdd(&densification_info[n_primitives + current_primitive_idx], grad_l2_norm_accum);
+                }
             }
         }
     }

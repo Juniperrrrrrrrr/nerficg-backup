@@ -20,7 +20,7 @@ from Methods.SPaGS.SPaGSCudaBackend import update_3d_filter
 class Gaussians(torch.nn.Module):
     """Stores a set of points with 3D Gaussian extent."""
 
-    GOF_DENSIFICATION_GRAD = True
+    GOF_DENSIFICATION_GRAD = False
     GOF_DENSIFICATION_CLONE = True
 
     def __init__(self, sh_degree: int, pretrained: bool) -> None:
@@ -340,7 +340,8 @@ class Gaussians(torch.nn.Module):
         new_rotations = self._rotations[selected_pts_mask].repeat(2, 1)
         new_sh_0 = self._sh_0[selected_pts_mask].repeat(2, 1, 1)
         new_sh_rest = self._sh_rest[selected_pts_mask].repeat(2, 1, 1)
-        new_opacities = self._opacities[selected_pts_mask].repeat(2, 1)
+        # 4.4 Opacity Correction (Bulò et al.): preserve total opacity after split
+        new_opacities = self.inverse_opacity_activation(1.0 - torch.sqrt(1.0 - self.opacity_activation(self._opacities[selected_pts_mask]))).repeat(2, 1)
 
         self.densification_postfix(new_positions, new_sh_0, new_sh_rest, new_opacities, new_scales, new_rotations)
 
@@ -366,14 +367,17 @@ class Gaussians(torch.nn.Module):
 
         new_sh_0 = self._sh_0[selected_pts_mask]
         new_sh_rest = self._sh_rest[selected_pts_mask]
-        new_opacities = self._opacities[selected_pts_mask]
+        # 4.4 Opacity Correction (Bulò et al.): preserve total opacity after clone
+        new_opacities = self.inverse_opacity_activation(1.0 - torch.sqrt(1.0 - self.opacity_activation(self._opacities[selected_pts_mask])))
+        self._opacities.data[selected_pts_mask] = new_opacities
         new_scales = self._scales[selected_pts_mask]
         new_rotations = self._rotations[selected_pts_mask]
 
         self.densification_postfix(new_positions, new_sh_0, new_sh_rest, new_opacities, new_scales, new_rotations)
 
-    def densify_and_prune(self, grad_threshold: float, min_opacity: float, prune_large_gaussians: bool) -> None:
+    def densify_and_prune(self, grad_threshold: float, min_opacity: float, prune_large_gaussians: bool, metric: torch.Tensor | None = None) -> None:
         """Densifies the point cloud and prunes points that are not visible or too large."""
+        n_old = self.get_positions.shape[0]
         denominator = self.densification_info[0].clamp_min(1.0)
         grads = self.densification_info[1] / denominator
         grads_abs, grad_abs_threshold = None, None
@@ -382,10 +386,30 @@ class Gaussians(torch.nn.Module):
             ratio = (grads.flatten() >= grad_threshold).float().mean()
             grad_abs_threshold = torch.quantile(grads_abs.flatten(), 1.0 - ratio).item()
 
+        # 4.3 Significance-aware Pruning: use densification count as default importance metric
+        if metric is None and self.densification_info.shape[0] >= 1:
+            metric = self.densification_info[0].squeeze().clone()
+
         self.duplicate(grads, grad_threshold, grads_abs, grad_abs_threshold)
         prune_mask = self.split(grads, grad_threshold, grads_abs, grad_abs_threshold)
 
-        prune_mask |= self.get_opacities.flatten() < min_opacity
+        if metric is not None and metric.shape[0] == n_old:
+            n_new = self.get_positions.shape[0]
+            is_old = torch.zeros(n_new, dtype=torch.bool, device='cuda')
+            is_old[:n_old] = True
+            scores = torch.zeros(n_new, dtype=metric.dtype, device='cuda')
+            scores[:n_old] = metric
+            prunes = (self.get_opacities.flatten() < min_opacity).sum().item()
+            numbers = n_new
+            if prunes > 0 and numbers > 0:
+                quantile = torch.quantile(scores[is_old], prunes / numbers)
+                score_mask = torch.zeros(n_new, dtype=torch.bool, device='cuda')
+                score_mask[is_old] = scores[is_old] < quantile
+                opacity_mask = self.get_opacities.flatten() < min_opacity
+                prune_mask = torch.logical_or(prune_mask, torch.logical_and(score_mask, opacity_mask))
+        else:
+            prune_mask |= self.get_opacities.flatten() < min_opacity
+
         if prune_large_gaussians:
             prune_mask |= self.get_scales.max(dim=1).values > 0.1 * self.training_cameras_extent
         self.prune_points(prune_mask)
