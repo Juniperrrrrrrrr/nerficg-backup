@@ -27,6 +27,7 @@ class RasterizerSettings(NamedTuple):
     height: int
     near_plane: float
     scale_modifier: float  # scaling factor to be applied to each Gaussian
+    depth_threshold: float  # threshold for distance scaling in backward pass
 
     def as_tuple(self) -> tuple:
         return (
@@ -99,6 +100,7 @@ class _Rasterize(torch.autograd.Function):
             ctx.n_instances,
             ctx.instance_primitive_indices_selector,
             ctx.use_distance_scaling,
+            ctx.rasterizer_settings.depth_threshold,
         )
         return (
             grad_positions,
@@ -125,6 +127,7 @@ class SPaGSRasterizer(torch.nn.Module):
             K: int,
             active_sh_bases: int,
             scale_modifier: float,
+            depth_threshold: float = 0.37,
     ) -> RasterizerSettings:
         if not isinstance(camera.properties.distortion_parameters, IdentityDistortion):
             Logger.logWarning('rasterizer ignores all distortion parameters')
@@ -146,6 +149,7 @@ class SPaGSRasterizer(torch.nn.Module):
             height=camera.properties.height,
             near_plane=camera.near_plane,
             scale_modifier=scale_modifier,
+            depth_threshold=depth_threshold,
         )
 
     def forward(
@@ -163,6 +167,7 @@ class SPaGSRasterizer(torch.nn.Module):
             active_sh_bases: int,
             scale_modifier: float,
             use_distance_scaling: bool,
+            depth_threshold: float = 0.37,
     ) -> torch.Tensor:
         return _Rasterize.apply(
             positions,
@@ -177,7 +182,8 @@ class SPaGSRasterizer(torch.nn.Module):
                 mode=mode,
                 K=K,
                 active_sh_bases=active_sh_bases,
-                scale_modifier=scale_modifier
+                scale_modifier=scale_modifier,
+                depth_threshold=depth_threshold,
             ),
             use_distance_scaling,
         )

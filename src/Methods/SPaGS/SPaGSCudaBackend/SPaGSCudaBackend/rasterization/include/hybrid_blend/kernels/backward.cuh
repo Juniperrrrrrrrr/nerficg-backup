@@ -25,7 +25,8 @@ namespace SPaGS::rasterization::hybrid_blend::kernels::backward {
         const uint n_primitives,
         const uint active_sh_bases,
         const uint total_sh_bases,
-        const bool use_distance_scaling)
+        const bool use_distance_scaling,
+        const float depth_threshold)
     {
         const uint primitive_idx = __umul24(blockIdx.x, blockDim.x) + threadIdx.x;
         if (primitive_idx >= n_primitives || primitive_n_touched_tiles[primitive_idx] == 0) return;
@@ -93,7 +94,8 @@ namespace SPaGS::rasterization::hybrid_blend::kernels::backward {
                     dot(make_float3(M2), position_world) + M2.w,
                     dot(make_float3(M3), position_world) + M3.w
                 );
-                distance_scale = fminf(1.0f, length(position_view) * 0.5f);
+                float depth = length(position_view);
+                distance_scale = fminf(1.0f, (depth_threshold / depth) * (depth_threshold / depth));
             }
             densification_info[n_primitives + primitive_idx] += length(dL_dposition * distance_scale);
             if (densification_info_helper != nullptr) densification_info[2 * n_primitives + primitive_idx] += distance_scale * densification_info_helper[primitive_idx];
@@ -195,7 +197,7 @@ namespace SPaGS::rasterization::hybrid_blend::kernels::backward {
 
         // every thread accumulates gradients for one gaussian at a time
         uint current_primitive_idx;
-        float dL_dopacity_accum, pixel_count_accum, grad_l2_norm_accum, current_opacity;
+        float dL_dopacity_accum, pixel_count_accum, grad_l2_norm_accum, alpha_contrib_accum, current_opacity;
         float3 dL_drgb_accum, dL_dposition_accum, dL_dMT1_accum, dL_dMT2_accum, dL_dMT3_accum, current_rgb;
         float4 current_MT1, current_MT2, current_MT3;
 
@@ -222,6 +224,7 @@ namespace SPaGS::rasterization::hybrid_blend::kernels::backward {
                 if (densification_info != nullptr) {
                     pixel_count_accum = 0.0f;
                     grad_l2_norm_accum = 0.0f;
+                    alpha_contrib_accum = 0.0f;
                 }
             }
             block.sync();
@@ -339,6 +342,7 @@ namespace SPaGS::rasterization::hybrid_blend::kernels::backward {
                     if (densification_info != nullptr) {
                         pixel_count_accum += 1.0f;
                         grad_l2_norm_accum += length(dL_dposition);
+                        alpha_contrib_accum += alpha;
                     }
                 }
             }
@@ -364,6 +368,7 @@ namespace SPaGS::rasterization::hybrid_blend::kernels::backward {
                 if (densification_info != nullptr) {
                     atomicAdd(&densification_info[current_primitive_idx], pixel_count_accum);
                     atomicAdd(&densification_info[n_primitives + current_primitive_idx], grad_l2_norm_accum);
+                    atomicAdd(&densification_info[3 * n_primitives + current_primitive_idx], alpha_contrib_accum);
                 }
             }
         }

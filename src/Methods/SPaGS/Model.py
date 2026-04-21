@@ -316,11 +316,12 @@ class Gaussians(torch.nn.Module):
 
     def reset_densification_info(self):
         n_points = self._positions.shape[0]
-        n_floats = 3 if Gaussians.GOF_DENSIFICATION_GRAD else 2
+        n_floats = 4 if Gaussians.GOF_DENSIFICATION_GRAD else 3
         self.densification_info = torch.zeros((n_floats, n_points, 1), dtype=torch.float32, device='cuda')
 
     def split(self, grads: torch.Tensor, grad_threshold: float, grads_abs: torch.Tensor | None, grad_abs_threshold: float | None) -> torch.Tensor:
-        """Densify by splitting Gaussians that satisfy the gradient condition."""
+        """Densify by splitting Gaussians that satisfy the gradient condition.
+        Returns prune_filter for parent points (True = prune parent)."""
         n_init_points = self.get_positions.shape[0]
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros(n_init_points, dtype=torch.float32, device='cuda')
@@ -375,6 +376,36 @@ class Gaussians(torch.nn.Module):
 
         self.densification_postfix(new_positions, new_sh_0, new_sh_rest, new_opacities, new_scales, new_rotations)
 
+    def split(self, grads: torch.Tensor, grad_threshold: float, grads_abs: torch.Tensor | None, grad_abs_threshold: float | None) -> torch.Tensor:
+        """Densify by splitting Gaussians that satisfy the gradient condition.
+        Returns prune_filter for parent points (True = prune parent)."""
+        n_init_points = self.get_positions.shape[0]
+        # Extract points that satisfy the gradient condition
+        padded_grad = torch.zeros(n_init_points, dtype=torch.float32, device='cuda')
+        padded_grad[:grads.shape[0]] = grads.squeeze()
+        selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
+        if grads_abs is not None:
+            padded_grad_abs = torch.zeros(n_init_points, dtype=torch.float32, device='cuda')
+            padded_grad_abs[:grads_abs.shape[0]] = grads_abs.squeeze()
+            selected_pts_mask |= torch.where(padded_grad_abs >= grad_abs_threshold, True, False)
+        selected_pts_mask &= torch.max(self.get_scales, dim=1).values > self.percent_dense * self.training_cameras_extent
+
+        stds = self.get_scales[selected_pts_mask].repeat(2, 1)
+        samples = torch.normal(mean=0.0, std=stds)
+        rots = quaternion_to_rotation_matrix(self._rotations[selected_pts_mask]).repeat(2, 1, 1)
+        new_positions = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_positions[selected_pts_mask].repeat(2, 1)
+        new_scales = self.inverse_scale_activation(self.get_scales[selected_pts_mask].repeat(2, 1) / 1.6)
+        new_rotations = self._rotations[selected_pts_mask].repeat(2, 1)
+        new_sh_0 = self._sh_0[selected_pts_mask].repeat(2, 1, 1)
+        new_sh_rest = self._sh_rest[selected_pts_mask].repeat(2, 1, 1)
+        # 4.4 Opacity Correction (Bulò et al.): preserve total opacity after split
+        new_opacities = self.inverse_opacity_activation(1.0 - torch.sqrt(1.0 - self.opacity_activation(self._opacities[selected_pts_mask]))).repeat(2, 1)
+
+        self.densification_postfix(new_positions, new_sh_0, new_sh_rest, new_opacities, new_scales, new_rotations)
+
+        prune_filter = torch.cat((selected_pts_mask, torch.zeros(2 * selected_pts_mask.sum().item(), device='cuda', dtype=torch.bool)))
+        return prune_filter
+
     def densify_and_prune(self, grad_threshold: float, min_opacity: float, prune_large_gaussians: bool, metric: torch.Tensor | None = None) -> None:
         """Densifies the point cloud and prunes points that are not visible or too large."""
         n_old = self.get_positions.shape[0]
@@ -386,25 +417,24 @@ class Gaussians(torch.nn.Module):
             ratio = (grads.flatten() >= grad_threshold).float().mean()
             grad_abs_threshold = torch.quantile(grads_abs.flatten(), 1.0 - ratio).item()
 
-        # 4.3 Significance-aware Pruning: use densification count as default importance metric
-        if metric is None and self.densification_info.shape[0] >= 1:
-            metric = self.densification_info[0].squeeze().clone()
+        # 4.3 Significance-aware Pruning: use alpha contribution as default importance metric
+        if metric is None and self.densification_info.shape[0] >= 4:
+            metric = self.densification_info[3].squeeze().clone()
 
         self.duplicate(grads, grad_threshold, grads_abs, grad_abs_threshold)
         prune_mask = self.split(grads, grad_threshold, grads_abs, grad_abs_threshold)
 
         if metric is not None and metric.shape[0] == n_old:
-            n_new = self.get_positions.shape[0]
-            is_old = torch.zeros(n_new, dtype=torch.bool, device='cuda')
-            is_old[:n_old] = True
-            scores = torch.zeros(n_new, dtype=metric.dtype, device='cuda')
-            scores[:n_old] = metric
+            # Only old points participate in significance-aware pruning
+            # New points (clone/split children) are NOT scored by significance
             prunes = (self.get_opacities.flatten() < min_opacity).sum().item()
-            numbers = n_new
+            numbers = self.get_positions.shape[0]
             if prunes > 0 and numbers > 0:
-                quantile = torch.quantile(scores[is_old], prunes / numbers)
-                score_mask = torch.zeros(n_new, dtype=torch.bool, device='cuda')
-                score_mask[is_old] = scores[is_old] < quantile
+                # Compute quantile only from old points' metric
+                quantile = torch.quantile(metric, prunes / numbers)
+                # Mark old points with low significance AND low opacity
+                score_mask = torch.zeros(self.get_positions.shape[0], dtype=torch.bool, device='cuda')
+                score_mask[:n_old] = metric < quantile
                 opacity_mask = self.get_opacities.flatten() < min_opacity
                 prune_mask = torch.logical_or(prune_mask, torch.logical_and(score_mask, opacity_mask))
         else:

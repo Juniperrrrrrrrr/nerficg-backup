@@ -48,7 +48,8 @@ namespace SPaGS::rasterization {
         const float scale_modifier,
         const int n_instances,
         const int instance_primitive_indices_selector,
-        const bool use_distance_scaling);
+        const bool use_distance_scaling,
+        const float depth_threshold);
 
     std::tuple<torch::Tensor, torch::Tensor>
     inference_wrapper(

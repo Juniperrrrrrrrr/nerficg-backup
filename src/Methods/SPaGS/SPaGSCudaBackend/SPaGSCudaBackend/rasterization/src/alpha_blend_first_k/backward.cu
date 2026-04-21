@@ -52,7 +52,8 @@ void SPaGS::rasterization::alpha_blend_first_k::backward(
     const int height,
     const int n_instances,
     const int instance_primitive_indices_selector,
-    const bool use_distance_scaling)
+    const bool use_distance_scaling,
+    const float depth_threshold)
 {
     cudaMemcpyToSymbol(c_M, M, 3 * sizeof(float4), 0, cudaMemcpyDeviceToDevice);
     cudaMemcpyToSymbol(c_cam_position, cam_position, sizeof(float3), 0, cudaMemcpyDeviceToDevice);
@@ -116,7 +117,8 @@ void SPaGS::rasterization::alpha_blend_first_k::backward(
         n_primitives,
         active_sh_bases,
         total_sh_bases,
-        use_distance_scaling
+        use_distance_scaling,
+        depth_threshold
     );
     CHECK_CUDA(config::debug_backward, "preprocess_backward")
 

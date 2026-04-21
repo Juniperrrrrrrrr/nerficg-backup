@@ -20,7 +20,8 @@ namespace SPaGS::rasterization::alpha_blend_global_ordering::kernels::backward {
         const uint n_primitives,
         const uint active_sh_bases,
         const uint total_sh_bases,
-        const bool use_distance_scaling)
+        const bool use_distance_scaling,
+        const float depth_threshold)
     {
         const uint primitive_idx = __umul24(blockIdx.x, blockDim.x) + threadIdx.x;
         if (primitive_idx >= n_primitives || primitive_n_touched_tiles[primitive_idx] == 0) return;
@@ -53,7 +54,8 @@ namespace SPaGS::rasterization::alpha_blend_global_ordering::kernels::backward {
                     dot(make_float3(M2), position_world) + M2.w,
                     dot(make_float3(M3), position_world) + M3.w
                 );
-                distance_scale = fminf(1.0f, length(position_view) * 0.5f);
+                float depth = length(position_view);
+                distance_scale = fminf(1.0f, (depth_threshold / depth) * (depth_threshold / depth));
             }
             densification_info[n_primitives + primitive_idx] += length(dL_dposition * distance_scale);
             if (densification_info_helper != nullptr) densification_info[2 * n_primitives + primitive_idx] += distance_scale * densification_info_helper[primitive_idx];
@@ -271,6 +273,7 @@ namespace SPaGS::rasterization::alpha_blend_global_ordering::kernels::backward {
                     if (densification_info != nullptr) {
                         atomicAdd(&densification_info[primitive_idx], 1.0f);
                         atomicAdd(&densification_info[n_primitives + primitive_idx], length(dL_dposition));
+                        atomicAdd(&densification_info[3 * n_primitives + primitive_idx], alpha);
                     }
                     if (densification_info_helper != nullptr) atomicAdd(&densification_info_helper[primitive_idx], fabsf(dL_dposition.x) + fabsf(dL_dposition.y) + fabsf(dL_dposition.z));
 

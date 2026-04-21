@@ -158,7 +158,7 @@ def _export_spags_gaussians_to_point_cloud_ply(gaussians, ply_path, sh_degree: i
     PERCENT_DENSE=0.01,
     USE_3D_FILTER=True,
     USE_OPACITY_RESET=True,
-    OPACITY_RESET_MAX_OPACITY=0.1,
+    OPACITY_RESET_MAX_OPACITY=0.01,  # 0.1 -> 0.01, match ADC-3DGS
     USE_OPACITY_DECAY=False,
     USE_VISIBILITY_PRUNING=False,
     VISIBILITY_PRUNING_THRESHOLD=0.01,

@@ -64,6 +64,7 @@ class SPaGSRenderer(BaseRenderer):
             active_sh_bases=self.model.gaussians.active_sh_bases,
             scale_modifier=1.0,
             use_distance_scaling=use_distance_scaling and update_densification_info,
+            depth_threshold=0.37 * self.model.gaussians.training_cameras_extent,
         )
 
     @torch.no_grad()

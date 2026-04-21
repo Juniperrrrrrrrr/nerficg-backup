@@ -35,6 +35,7 @@ namespace SPaGS::rasterization::hybrid_blend {
         const int near,
         const int n_instances,
         const int instance_primitive_indices_selector,
-        const bool use_distance_scaling);
+        const bool use_distance_scaling,
+        const float depth_threshold);
 
 }

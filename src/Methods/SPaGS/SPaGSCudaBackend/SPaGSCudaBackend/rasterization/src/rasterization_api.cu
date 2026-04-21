@@ -190,7 +190,8 @@ SPaGS::rasterization::backward_wrapper(
     const float scale_modifier,
     const int n_instances,
     const int instance_primitive_indices_selector,
-    const bool use_distance_scaling)
+    const bool use_distance_scaling,
+    const float depth_threshold)
 {
     const RasterizerMode mode = static_cast<RasterizerMode>(rasterizer_mode);
     const int n_primitives = positions.size(0);
@@ -205,7 +206,7 @@ SPaGS::rasterization::backward_wrapper(
     torch::Tensor grad_MT = (mode == RasterizerMode::HYBRID_BLEND || mode == RasterizerMode::OIT_BLEND) ? torch::zeros({n_primitives * 9}, float_options) : torch::empty({0}, float_options);
 
     const bool update_densification_info = densification_info.size(0) > 0;
-    const bool compute_abs_grad = densification_info.size(0) == 3;
+    const bool compute_abs_grad = densification_info.size(0) == 4;
     const bool requires_densification_info_helper = update_densification_info && compute_abs_grad;
     torch::Tensor densification_info_helper;
     if (requires_densification_info_helper) densification_info_helper = torch::zeros({n_primitives, 1}, float_options);
@@ -243,7 +244,8 @@ SPaGS::rasterization::backward_wrapper(
                 near_plane,
                 n_instances,
                 instance_primitive_indices_selector,
-                use_distance_scaling);
+                use_distance_scaling,
+                depth_threshold);
             break;
         case RasterizerMode::ALPHA_BLEND_FIRST_K:
             alpha_blend_first_k::backward(
@@ -275,7 +277,8 @@ SPaGS::rasterization::backward_wrapper(
                 height,
                 n_instances,
                 instance_primitive_indices_selector,
-                use_distance_scaling);
+                use_distance_scaling,
+                depth_threshold);
             break;
         case RasterizerMode::ALPHA_BLEND_GLOBAL_ORDERING:
             alpha_blend_global_ordering::backward(
@@ -307,7 +310,8 @@ SPaGS::rasterization::backward_wrapper(
                 near_plane,
                 n_instances,
                 instance_primitive_indices_selector,
-                use_distance_scaling);
+                use_distance_scaling,
+                depth_threshold);
             break;
         case RasterizerMode::OIT_BLEND:
             oit_blend::backward(
@@ -340,7 +344,8 @@ SPaGS::rasterization::backward_wrapper(
                 near_plane,
                 n_instances,
                 instance_primitive_indices_selector,
-                use_distance_scaling);
+                use_distance_scaling,
+                depth_threshold);
             break;
         default:
             throw std::runtime_error("unsupported rasterizer mode");
